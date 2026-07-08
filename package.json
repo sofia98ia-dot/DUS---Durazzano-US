@@ -1,0 +1,11 @@
+{
+  "name": "dus-skeleton",
+  "version": "0.2.0",
+  "description": "DUS - Durazzano Us. Multiplayer di deduzione sociale con stanze a codice. Grafica segnaposto.",
+  "main": "server.js",
+  "scripts": { "start": "node server.js" },
+  "dependencies": {
+    "express": "^4.19.2",
+    "socket.io": "^4.7.5"
+  }
+}
