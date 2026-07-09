@@ -22,7 +22,8 @@ const CFG = {
   PLAYER_R: 16,
   SPEED: 220,
   KILL_RANGE: 70,
-  KILL_COOLDOWN: 20,
+  KILL_COOLDOWN: 20,        // secondi tra un'uccisione e l'altra
+  KILL_COOLDOWN_START: 6,   // attesa iniziale (e dopo una riunione): più corta per testare
   INTERACT_RANGE: 60,
   TASKS_PER_PLAYER: 3,
   VOTE_SECONDS: 40,
@@ -119,7 +120,7 @@ function startGame(g) {
   g.totalRealTasks = 0; g.doneRealTasks = 0;
   for (const p of players) {
     p.alive = true;
-    p.killReadyAt = Date.now() + CFG.KILL_COOLDOWN * 1000;
+    p.killReadyAt = Date.now() + CFG.KILL_COOLDOWN_START * 1000;
     p.emergencyLeft = CFG.EMERGENCY_PER_PLAYER;
     do { p.x = 100 + Math.random()*(CFG.MAP_W-200); p.y = 100 + Math.random()*(CFG.MAP_H-200); }
     while (collides(p.x, p.y));
@@ -172,7 +173,7 @@ function resolveMeeting(g) {
     if (p) { p.alive = false; ejected = { name:p.name, color:p.color }; wasImpostor = p.role === 'IMPOSTOR'; }
   }
   for (const p of g.players.values()) {
-    p.killReadyAt = Date.now() + CFG.KILL_COOLDOWN*1000;
+    p.killReadyAt = Date.now() + CFG.KILL_COOLDOWN_START*1000;
     p.input = { up:false, down:false, left:false, right:false };
   }
   g.bodies = [];
