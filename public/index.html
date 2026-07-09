@@ -135,7 +135,7 @@
   <div id="hud">
     <span class="pill" id="rolePill">—</span>
     <div class="pill" id="progressWrap"><div id="progressBar"><div id="progressFill"></div></div></div>
-    <span class="pill" id="alivePill"></span>
+    <span class="pill" id="areaPill"></span>
   </div>
   <div id="joystick" class="hidden"><div id="stick"></div></div>
   <div class="desktop-hint" id="desktopHint">Muoviti con WASD o le frecce</div>
@@ -288,7 +288,7 @@ function updateHUD(s){
   if(!you.alive) rp.innerHTML+=' <span style="color:var(--muted)">(fantasma)</span>';
   const pct = s.progress.total? Math.round(100*s.progress.done/s.progress.total):0;
   $('#progressFill').style.width=pct+'%';
-  $('#alivePill').textContent = `Vivi: ${s.players.filter(p=>p.alive).length}`;
+  $('#areaPill').textContent = you.area || '—';
 
   const playing = phase==='PLAYING';
   const kb=$('#killBtn');
@@ -405,19 +405,30 @@ function draw(){
   const camX=(me?me.x:CFG.MAP_W/2)-VIEW.w/2, camY=(me?me.y:CFG.MAP_H/2)-VIEW.h/2;
 
   ctx.clearRect(0,0,VIEW.w,VIEW.h);
-  ctx.fillStyle='#070a15'; ctx.fillRect(0,0,VIEW.w,VIEW.h);
-  ctx.fillStyle='#0e1428'; ctx.fillRect(-camX,-camY,CFG.MAP_W,CFG.MAP_H);
-  ctx.strokeStyle='rgba(255,255,255,.03)';ctx.lineWidth=1;
-  for(let x=0;x<=CFG.MAP_W;x+=80){ctx.beginPath();ctx.moveTo(x-camX,-camY);ctx.lineTo(x-camX,CFG.MAP_H-camY);ctx.stroke();}
-  for(let y=0;y<=CFG.MAP_H;y+=80){ctx.beginPath();ctx.moveTo(-camX,y-camY);ctx.lineTo(CFG.MAP_W-camX,y-camY);ctx.stroke();}
-  ctx.strokeStyle='#26304f';ctx.lineWidth=4;ctx.strokeRect(-camX,-camY,CFG.MAP_W,CFG.MAP_H);
-  ctx.fillStyle='#1c2647'; CFG.walls.forEach(w=>ctx.fillRect(w.x-camX,w.y-camY,w.w,w.h));
+  // sfondo scuro = "fuori dal paese" (muri)
+  ctx.fillStyle='#080b16'; ctx.fillRect(0,0,VIEW.w,VIEW.h);
+
+  // strade (corridoi)
+  ctx.fillStyle='#2a3350';
+  (CFG.streets||[]).forEach(s=> ctx.fillRect(s.x-camX, s.y-camY, s.w, s.h));
+
+  // zone (stanze) con nome
+  (CFG.zones||[]).forEach(z=>{
+    const zx=z.x-camX, zy=z.y-camY;
+    ctx.fillStyle='#141d38';
+    ctx.fillRect(zx,zy,z.w,z.h);
+    ctx.strokeStyle='#39456e';ctx.lineWidth=3;
+    ctx.strokeRect(zx,zy,z.w,z.h);
+    ctx.fillStyle='rgba(200,210,235,.5)';
+    ctx.font='bold 15px sans-serif';ctx.textAlign='center';
+    ctx.fillText(z.name, zx+z.w/2, zy+22);
+  });
 
   const myTasks=(SELF.tasks||[]);
   CFG.taskSpots.forEach(s=>{
     const mine=myTasks.find(t=>t.id===s.id), active=mine&&!mine.done;
     ctx.beginPath();ctx.arc(s.x-camX,s.y-camY,14,0,7);
-    ctx.fillStyle=active?'rgba(74,222,128,.9)':'rgba(120,140,190,.35)';ctx.fill();
+    ctx.fillStyle=active?'rgba(74,222,128,.9)':'rgba(120,140,190,.25)';ctx.fill();
     if(active){ctx.strokeStyle='#4ade80';ctx.lineWidth=3;ctx.stroke();
       ctx.fillStyle='#9fffc4';ctx.font='11px sans-serif';ctx.textAlign='center';ctx.fillText(s.name,s.x-camX,s.y-camY-22);}
   });
