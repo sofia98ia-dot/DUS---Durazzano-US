@@ -158,8 +158,12 @@ let SELF = {};
 let LAST = null;
 let CFG = null;
 let phase = 'LOBBY';
+let prevPhase = 'LOBBY';
 let selColor = null;
 let MY_CODE = null;
+let curMeeting = null;   // ultima riunione ricevuta (per i click sul voto)
+let voteSig = null;      // firma del contenuto voti: ridisegna solo se cambia
+let revealTimer = null;  // timer della schermata "sei impostore/equipaggio"
 const $ = s => document.querySelector(s);
 
 // ---------- Colori ----------
@@ -196,6 +200,7 @@ $('#leaveBtn').onclick=()=> location.reload();
 
 // ---------- Phase ----------
 socket.on('phase', (d)=>{
+  const wasPhase = prevPhase;
   phase=d.phase;
   if(d.you&&d.you.id) ME.id=d.you.id;
   if(d.code) MY_CODE=d.code;
@@ -211,9 +216,13 @@ socket.on('phase', (d)=>{
   } else {
     $('#lobby').classList.add('hidden');
     $('#game').classList.remove('hidden');
-    if(phase==='PLAYING') $('#overlay').classList.add('hidden');
+    // inizio di una nuova partita: mostra il ruolo a schermo intero
+    const showingReveal = (phase==='PLAYING' && wasPhase==='LOBBY' && d.you);
+    if(showingReveal) showRoleReveal(d.you.role);
+    else if(phase==='PLAYING') $('#overlay').classList.add('hidden');
     fitCanvas();
   }
+  prevPhase = d.phase;
 });
 
 function renderLobby(list, minPlayers){
@@ -269,12 +278,13 @@ $('#useBtn').onclick=()=>{ if(SELF.nearTask) socket.emit('completeTask',{taskId:
 socket.on('state', (s)=>{
   LAST=s; SELF=s.you||{}; phase=s.phase;
   if(phase==='MEETING' && s.meeting) renderMeeting(s.meeting);
+  else { curMeeting=null; voteSig=null; }
   updateHUD(s);
 });
 function updateHUD(s){
   const you=s.you;
   const rp=$('#rolePill');
-  rp.innerHTML = you.role==='IMPOSTOR' ? '<span class="role-imp">IMPOSTORE</span>' : '<span class="role-crew">CREW</span>';
+  rp.innerHTML = you.role==='IMPOSTOR' ? '<span class="role-imp">IMPOSTORE</span>' : '<span class="role-crew">EQUIPAGGIO</span>';
   if(!you.alive) rp.innerHTML+=' <span style="color:var(--muted)">(fantasma)</span>';
   const pct = s.progress.total? Math.round(100*s.progress.done/s.progress.total):0;
   $('#progressFill').style.width=pct+'%';
@@ -293,36 +303,70 @@ function updateHUD(s){
   if(playing && you.alive){ eb.classList.remove('hidden'); eb.disabled=you.emergencyLeft<=0; } else eb.classList.add('hidden');
 }
 
+// ---------- Ruolo a inizio partita ----------
+function showRoleReveal(role){
+  const imp = role==='IMPOSTOR';
+  $('#overlay').classList.remove('hidden');
+  voteSig=null; curMeeting=null;
+  $('#voteCard').innerHTML=`
+    <div class="big" style="color:${imp?'var(--danger)':'var(--accent)'}">${imp?'SEI UN IMPOSTORE':'SEI DELL\'EQUIPAGGIO'}</div>
+    <div class="result" style="color:var(--muted)">${imp?'Elimina l\'equipaggio senza farti scoprire. Usa i condotti… quando li aggiungeremo!':'Completa i task e scopri chi è l\'impostore.'}</div>`;
+  clearTimeout(revealTimer);
+  revealTimer=setTimeout(()=>{ if(phase==='PLAYING') $('#overlay').classList.add('hidden'); }, 3500);
+}
+
 // ---------- Meeting ----------
+// Un solo handler delegato sul contenitore stabile: sopravvive ai ridisegni.
+$('#voteCard').addEventListener('click', (e)=>{
+  const row = e.target.closest('.voteRow');
+  if(!row || !curMeeting) return;
+  if(!curMeeting.canVote || curMeeting.myVote!==null) return;
+  if(row.classList.contains('dead')) return;
+  socket.emit('vote', { target: row.dataset.id });
+});
+
 function renderMeeting(m){
+  curMeeting=m;
   $('#overlay').classList.remove('hidden');
   const counts={}; m.votes.forEach(v=> counts[v.target]=(counts[v.target]||0)+1 );
-  const rows = m.candidates.map(c=>{
-    const dead=!c.alive, mine=m.myVote===c.id, n=counts[c.id]||0;
-    return `<div class="voteRow ${dead?'dead':''} ${mine?'mine':''}" data-id="${c.id}">
-      <span class="dot" style="background:${c.color}"></span>
-      <span>${escapeHtml(c.name)}${dead?' 💀':''}</span>
-      <span class="voteCount">${'●'.repeat(n)}</span></div>`;
-  }).join('');
-  const skipN=counts['skip']||0, skipMine=m.myVote==='skip';
-  $('#voteCard').innerHTML=`
-    <span class="timer">${m.secondsLeft}s</span>
-    <h2>Riunione</h2>
-    <div class="vhead">${escapeHtml(m.reason)} — ${escapeHtml(m.calledBy)}</div>
-    ${rows}
-    <div class="voteRow ${skipMine?'mine':''}" data-id="skip">
-      <span class="dot" style="background:#555"></span><span>Salta voto</span>
-      <span class="voteCount">${'●'.repeat(skipN)}</span></div>
-    ${m.canVote ? (m.myVote?'<div class="vhead" style="margin-top:10px">Hai votato. In attesa degli altri…</div>':'')
-                : '<div class="vhead" style="margin-top:10px">Sei un fantasma: non puoi votare.</div>'}`;
-  if(m.canVote && !m.myVote){
-    $('#voteCard').querySelectorAll('.voteRow').forEach(r=>{
-      if(r.classList.contains('dead'))return;
-      r.onclick=()=> socket.emit('vote',{target:r.dataset.id});
-    });
+
+  // costruisci lo scheletro una sola volta per riunione
+  if(voteSig===null){
+    $('#voteCard').innerHTML=`
+      <span class="timer" id="voteTimer"></span>
+      <h2>Riunione</h2>
+      <div class="vhead">${escapeHtml(m.reason)} — ${escapeHtml(m.calledBy)}</div>
+      <div id="voteRows"></div>
+      <div class="vhead" id="voteStatus" style="margin-top:10px"></div>`;
+  }
+  // il timer si aggiorna ogni tick, senza toccare i pulsanti
+  const vt=$('#voteTimer'); if(vt) vt.textContent = m.secondsLeft+'s';
+
+  // ridisegna le righe SOLO se cambia qualcosa nei voti/stato (non ogni tick)
+  const sig = JSON.stringify({ c:m.candidates.map(c=>[c.id,c.alive]), v:counts, mv:m.myVote, cv:m.canVote });
+  if(sig!==voteSig){
+    voteSig=sig;
+    const rows = m.candidates.map(c=>{
+      const dead=!c.alive, mine=m.myVote===c.id, n=counts[c.id]||0;
+      return `<div class="voteRow ${dead?'dead':''} ${mine?'mine':''}" data-id="${c.id}">
+        <span class="dot" style="background:${c.color}"></span>
+        <span>${escapeHtml(c.name)}${dead?' 💀':''}</span>
+        <span class="voteCount">${'●'.repeat(n)}</span></div>`;
+    }).join('');
+    const skipN=counts['skip']||0, skipMine=m.myVote==='skip';
+    const rowsEl=$('#voteRows');
+    if(rowsEl) rowsEl.innerHTML = rows + `
+      <div class="voteRow ${skipMine?'mine':''}" data-id="skip">
+        <span class="dot" style="background:#555"></span><span>Salta voto</span>
+        <span class="voteCount">${'●'.repeat(skipN)}</span></div>`;
+    const st=$('#voteStatus');
+    if(st) st.textContent = m.canVote
+      ? (m.myVote!==null ? 'Hai votato. In attesa degli altri…' : 'Tocca un giocatore (o "Salta voto") per votare.')
+      : 'Sei un fantasma: non puoi votare.';
   }
 }
 socket.on('meetingResult', (r)=>{
+  voteSig=null; curMeeting=null;
   let txt = r.skipped ? 'Nessuno è stato espulso.'
     : `${escapeHtml(r.ejected.name)} è stato espulso.<br><span style="color:var(--muted)">${r.wasImpostor?'Era un impostore.':'Non era un impostore.'}</span>`;
   $('#voteCard').innerHTML=`<h2>Esito</h2><div class="result">${txt}</div>`;
@@ -332,6 +376,7 @@ socket.on('meetingResult', (r)=>{
 // ---------- Fine ----------
 function showGameOver(winner){
   $('#overlay').classList.remove('hidden');
+  voteSig=null; curMeeting=null;
   const win = winner==='IMPOSTOR';
   $('#voteCard').innerHTML=`
     <div class="big" style="color:${win?'var(--danger)':'var(--accent)'}">${win?'Vittoria Impostori':'Vittoria Crew'}</div>
