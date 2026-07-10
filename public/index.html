@@ -387,6 +387,10 @@ function showGameOver(winner){
 
 // ---------- Canvas ----------
 const cv=$('#cv'), ctx=cv.getContext('2d');
+// mappa di Durazzano (sfondo)
+const mapImg=new Image(); let mapReady=false;
+mapImg.onload=()=>{ mapReady=true; };
+mapImg.src='/durazzano.png';
 let VIEW={w:0,h:0};
 function fitCanvas(){
   const dpr=Math.min(devicePixelRatio||1,2);
@@ -405,24 +409,14 @@ function draw(){
   const camX=(me?me.x:CFG.MAP_W/2)-VIEW.w/2, camY=(me?me.y:CFG.MAP_H/2)-VIEW.h/2;
 
   ctx.clearRect(0,0,VIEW.w,VIEW.h);
-  // sfondo scuro = "fuori dal paese" (muri)
-  ctx.fillStyle='#080b16'; ctx.fillRect(0,0,VIEW.w,VIEW.h);
+  // erba di base come fallback finché l'immagine non è caricata
+  ctx.fillStyle='#4f9860'; ctx.fillRect(0,0,VIEW.w,VIEW.h);
 
-  // strade (corridoi)
-  ctx.fillStyle='#2a3350';
-  (CFG.streets||[]).forEach(s=> ctx.fillRect(s.x-camX, s.y-camY, s.w, s.h));
-
-  // zone (stanze) con nome
-  (CFG.zones||[]).forEach(z=>{
-    const zx=z.x-camX, zy=z.y-camY;
-    ctx.fillStyle='#141d38';
-    ctx.fillRect(zx,zy,z.w,z.h);
-    ctx.strokeStyle='#39456e';ctx.lineWidth=3;
-    ctx.strokeRect(zx,zy,z.w,z.h);
-    ctx.fillStyle='rgba(200,210,235,.5)';
-    ctx.font='bold 15px sans-serif';ctx.textAlign='center';
-    ctx.fillText(z.name, zx+z.w/2, zy+22);
-  });
+  // sfondo: la mappa di Durazzano (immagine allineata alle coordinate di gioco)
+  if(mapReady){
+    ctx.imageSmoothingEnabled=false;
+    ctx.drawImage(mapImg, -camX, -camY);
+  }
 
   const myTasks=(SELF.tasks||[]);
   CFG.taskSpots.forEach(s=>{
