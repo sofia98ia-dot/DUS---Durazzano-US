@@ -21,7 +21,7 @@ const CFG = {
   KILL_RANGE: 100, KILL_COOLDOWN: 20, KILL_COOLDOWN_START: 6,
   INTERACT_RANGE: 100, LOS_RANGE: 720,
   TASKS_PER_PLAYER: 3, VOTE_SECONDS: 40,
-  MIN_PLAYERS: 3, MAX_PLAYERS: 10, EMERGENCY_PER_PLAYER: 1,
+  MIN_PLAYERS: 3, MAX_PLAYERS: 20, EMERGENCY_PER_PLAYER: 1,
 };
 
 // ---- Zone (dal tuo editor) ----
@@ -53,7 +53,8 @@ const STREETS = ROAD_CELLS.map(([c,r],i)=>({ id:'r'+i, x:c*CELL, y:r*CELL, w:CEL
 // una postazione-task al centro di ogni zona
 const TASK_SPOTS = ZONES.map(z=>({ id:'task_'+z.id, x:Math.round(z.x+z.w/2), y:Math.round(z.y+z.h/2), name:z.name, zone:z.id }));
 
-const COLORS = ['#e63946','#457b9d','#2a9d8f','#e9c46a','#b5179e','#f4a261','#8ecae6','#606c38','#ff8fab','#adb5bd'];
+const COLORS = ['#e63946','#457b9d','#2a9d8f','#e9c46a','#b5179e','#f4a261','#8ecae6','#606c38','#ff8fab','#adb5bd',
+                '#c77dff','#90be6d','#ff6d00','#00b4d8','#7209b7','#d00000','#38b000','#4361ee','#f15bb5','#9c6644'];
 
 // ---------------- Stanze di gioco ----------------
 const rooms = new Map();
@@ -87,17 +88,34 @@ function lineOfSight(a,b){
   return true;
 }
 
+// Visibilità a compartimenti: dentro una stanza vedi SOLO chi è nella stessa stanza
+// (chi è fuori non ti vede finché non entra). In strada, chi è in strada e a vista.
+function sameCompartment(a,b){
+  const A=areaAt(a.x,a.y), B=areaAt(b.x,b.y);
+  if(!A||!B) return false;
+  if(A.id!=='road') return B.id===A.id;        // io in una stanza -> solo stessa stanza
+  return B.id==='road' && lineOfSight(a,b);      // io in strada -> solo strada, a vista
+}
+
 // ---------------- Host / colori ----------------
 function livingHost(g){ for(const p of g.players.values()) if(p.isHost) return p; return null; }
 function reassignHost(g){ if(livingHost(g))return; const f=g.players.values().next().value; if(f) f.isHost=true; }
 function usedColors(g){ return new Set([...g.players.values()].map(p=>p.color)); }
 function freeColor(g){ const u=usedColors(g); return COLORS.find(c=>!u.has(c))||COLORS[0]; }
 
+// numero impostori in base ai giocatori (scaglioni scelti dall'utente)
+function impostorCount(n){
+  if(n>=17) return 4;
+  if(n>=13) return 3;
+  if(n>=7)  return 2;
+  return 1;
+}
+
 // ---------------- Avvio ----------------
 function startGame(g){
   const players=[...g.players.values()];
   if(players.length<CFG.MIN_PLAYERS) return;
-  const impCount = players.length>=7?2:1;
+  const impCount = impostorCount(players.length);
   const shuffled=[...players].sort(()=>Math.random()-0.5);
   shuffled.forEach((p,i)=>{ p.role = i<impCount?'IMPOSTOR':'CREW'; });
   g.totalRealTasks=0; g.doneRealTasks=0;
@@ -200,13 +218,13 @@ function broadcastState(g){
       if(amGhost) return true;
       if(!o.alive) return false;
       if(o.id===me.id) return true;
-      return lineOfSight(me,o);
+      return sameCompartment(me,o);
     }).map(o=>({
       id:o.id, name:o.name, color:o.color, x:Math.round(o.x), y:Math.round(o.y), alive:o.alive,
       role:(o.id===me.id||(amImpostor&&o.role==='IMPOSTOR'))?o.role:null,
     }));
 
-    const visibleBodies=g.bodies.filter(b=> amGhost || lineOfSight(me,b));
+    const visibleBodies=g.bodies.filter(b=> amGhost || sameCompartment(me,b));
 
     let nearTask=null;
     if(g.phase==='PLAYING') for(const t of me.tasks) if(!t.done && dist(me,t)<CFG.INTERACT_RANGE){ nearTask=t.id; break; }
@@ -217,7 +235,7 @@ function broadcastState(g){
       let best=Infinity;
       for(const o of alivePlayers(g)){
         if(o.role==='IMPOSTOR') continue;
-        if(!lineOfSight(me,o)) continue;
+        if(!sameCompartment(me,o)) continue;
         const d=dist(me,o); if(d<CFG.KILL_RANGE && d<best){ best=d; killTarget=o.id; }
       }
     }
@@ -271,7 +289,7 @@ io.on('connection',(socket)=>{
     const me=g.players.get(socket.id);
     if(!me||me.role!=='IMPOSTOR'||!me.alive||Date.now()<me.killReadyAt) return;
     let victim=null,best=Infinity;
-    for(const o of alivePlayers(g)){ if(o.role==='IMPOSTOR') continue; if(!lineOfSight(me,o)) continue; const d=dist(me,o); if(d<CFG.KILL_RANGE && d<best){ best=d; victim=o; } }
+    for(const o of alivePlayers(g)){ if(o.role==='IMPOSTOR') continue; if(!sameCompartment(me,o)) continue; const d=dist(me,o); if(d<CFG.KILL_RANGE && d<best){ best=d; victim=o; } }
     if(!victim) return;
     victim.alive=false; g.bodies.push({ id:'b_'+victim.id, x:victim.x, y:victim.y, color:victim.color });
     me.x=victim.x; me.y=victim.y; me.killReadyAt=Date.now()+CFG.KILL_COOLDOWN*1000; checkWin(g);
@@ -285,12 +303,14 @@ io.on('connection',(socket)=>{
   socket.on('report',()=>{
     const g=gameOfSocket(socket.id); if(!g||g.phase!=='PLAYING')return;
     const me=g.players.get(socket.id); if(!me||!me.alive)return;
-    const near=g.bodies.some(b=> dist(me,b)<CFG.INTERACT_RANGE && lineOfSight(me,b));
+    const near=g.bodies.some(b=> dist(me,b)<CFG.INTERACT_RANGE && sameCompartment(me,b));
     if(near) startMeeting(g,me.name,'Cadavere segnalato');
   });
   socket.on('emergency',()=>{
     const g=gameOfSocket(socket.id); if(!g||g.phase!=='PLAYING')return;
     const me=g.players.get(socket.id); if(!me||!me.alive||me.emergencyLeft<=0)return;
+    const a=areaAt(me.x,me.y);            // riunione d'emergenza solo da Via Nova
+    if(!a || a.id!=='vianova') return;
     me.emergencyLeft--; startMeeting(g,me.name,"Riunione d'emergenza");
   });
   socket.on('vote',({target})=>{
