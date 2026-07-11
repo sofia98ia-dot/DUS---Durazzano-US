@@ -275,12 +275,40 @@ $('#emergBtn').onclick=()=>socket.emit('emergency');
 $('#useBtn').onclick=()=>{ if(SELF.nearTask) socket.emit('completeTask',{taskId:SELF.nearTask}); };
 
 // ---------- State ----------
+const posBuf={};   // id -> [{t,x,y}] campioni recenti per interpolazione
+const INTERP_DELAY=90;  // ms: disegna leggermente "nel passato" per riempire i buchi
 socket.on('state', (s)=>{
   LAST=s; SELF=s.you||{}; phase=s.phase;
+  const now=performance.now();
+  const seen=new Set();
+  (s.players||[]).forEach(p=>{
+    seen.add(p.id);
+    (posBuf[p.id]||(posBuf[p.id]=[])).push({t:now,x:p.x,y:p.y});
+    if(posBuf[p.id].length>10) posBuf[p.id].shift();
+  });
+  // libera i buffer di chi non è più visibile
+  for(const id in posBuf) if(!seen.has(id)) delete posBuf[id];
   if(phase==='MEETING' && s.meeting) renderMeeting(s.meeting);
   else { curMeeting=null; voteSig=null; }
   updateHUD(s);
 });
+// posizione interpolata di un giocatore (movimento fluido)
+function interpPos(p){
+  const b=posBuf[p.id];
+  if(!b || b.length===0) return {x:p.x,y:p.y};
+  if(b.length===1) return {x:b[0].x,y:b[0].y};
+  const rt=performance.now()-INTERP_DELAY;
+  if(rt<=b[0].t) return {x:b[0].x,y:b[0].y};
+  const last=b[b.length-1];
+  if(rt>=last.t) return {x:last.x,y:last.y};
+  for(let i=0;i<b.length-1;i++){
+    if(b[i].t<=rt && b[i+1].t>=rt){
+      const span=(b[i+1].t-b[i].t)||1, f=(rt-b[i].t)/span;
+      return {x:b[i].x+(b[i+1].x-b[i].x)*f, y:b[i].y+(b[i+1].y-b[i].y)*f};
+    }
+  }
+  return {x:last.x,y:last.y};
+}
 function updateHUD(s){
   const you=s.you;
   const rp=$('#rolePill');
@@ -300,7 +328,7 @@ function updateHUD(s){
   const ub=$('#useBtn');
   if(playing){ ub.classList.remove('hidden'); ub.disabled=!you.nearTask; } else ub.classList.add('hidden');
   const eb=$('#emergBtn');
-  if(playing && you.alive){ eb.classList.remove('hidden'); eb.disabled=you.emergencyLeft<=0; } else eb.classList.add('hidden');
+  if(playing && you.alive){ eb.classList.remove('hidden'); eb.disabled=(you.emergencyLeft<=0 || you.area!=='Via Nova'); } else eb.classList.add('hidden');
 }
 
 // ---------- Ruolo a inizio partita ----------
@@ -406,7 +434,8 @@ function draw(){
   requestAnimationFrame(draw);
   if(!LAST || !CFG || (phase!=='PLAYING' && phase!=='MEETING')) return;
   const me = LAST.players.find(p=>p.id===ME.id);
-  const camX=(me?me.x:CFG.MAP_W/2)-VIEW.w/2, camY=(me?me.y:CFG.MAP_H/2)-VIEW.h/2;
+  const mePos = me ? interpPos(me) : {x:CFG.MAP_W/2, y:CFG.MAP_H/2};
+  const camX=mePos.x-VIEW.w/2, camY=mePos.y-VIEW.h/2;
 
   ctx.clearRect(0,0,VIEW.w,VIEW.h);
   // erba di base come fallback finché l'immagine non è caricata
@@ -434,9 +463,8 @@ function draw(){
     ctx.moveTo(b.x+8-camX,b.y-8-camY);ctx.lineTo(b.x-8-camX,b.y+8-camY);ctx.stroke();
   });
   LAST.players.forEach(p=>{
-    if(!smooth[p.id]) smooth[p.id]={x:p.x,y:p.y};
-    smooth[p.id].x=lerp(smooth[p.id].x,p.x,0.3); smooth[p.id].y=lerp(smooth[p.id].y,p.y,0.3);
-    const x=smooth[p.id].x-camX, y=smooth[p.id].y-camY;
+    const ip=interpPos(p);
+    const x=ip.x-camX, y=ip.y-camY;
     ctx.globalAlpha=p.alive?1:0.45;
     ctx.beginPath();ctx.arc(x,y,CFG.PLAYER_R,0,7);ctx.fillStyle=p.color;ctx.fill();
     ctx.lineWidth=3;ctx.strokeStyle=(p.role==='IMPOSTOR')?'#ff5470':'rgba(0,0,0,.4)';ctx.stroke();
